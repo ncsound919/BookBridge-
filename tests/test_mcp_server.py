@@ -89,6 +89,10 @@ def test_tools_list(client):
         "bookbridge_cite",
         "bookbridge_link_activity",
         "bookbridge_list_books",
+        "bookbridge_annotate",
+        "bookbridge_get_annotations",
+        "bookbridge_summarize",
+        "bookbridge_flashcards",
     }
     assert expected == tool_names
 
@@ -214,3 +218,147 @@ def test_mcp_health(client):
 def test_sse_endpoint(client):
     r = client.get("/sse")
     assert r.status_code == 200
+
+
+# ── annotation tools ──────────────────────────────────────────────────────────
+
+
+def test_bookbridge_annotate(client, book_id):
+    r = client.post(
+        "/mcp",
+        json=_rpc(
+            "tools/call",
+            {
+                "name": "bookbridge_annotate",
+                "arguments": {
+                    "book_id": book_id,
+                    "page": 10,
+                    "highlight_text": "The Reynolds number characterizes flow.",
+                    "note": "Core concept",
+                    "color": "blue",
+                    "source": "mcp-agent",
+                },
+            },
+        ),
+    )
+    assert r.status_code == 200
+    result = json.loads(r.json()["result"]["content"][0]["text"])
+    assert result["status"] == "created"
+    assert "annotation_id" in result
+
+
+def test_bookbridge_annotate_bad_book(client):
+    r = client.post(
+        "/mcp",
+        json=_rpc(
+            "tools/call",
+            {"name": "bookbridge_annotate", "arguments": {"book_id": "bad-id", "page": 1}},
+        ),
+    )
+    assert r.status_code == 200
+    result = json.loads(r.json()["result"]["content"][0]["text"])
+    assert "error" in result
+
+
+def test_bookbridge_get_annotations(client, book_id):
+    # First create one
+    client.post(
+        "/mcp",
+        json=_rpc(
+            "tools/call",
+            {
+                "name": "bookbridge_annotate",
+                "arguments": {"book_id": book_id, "page": 10, "note": "annotated"},
+            },
+        ),
+    )
+    # Then retrieve
+    r = client.post(
+        "/mcp",
+        json=_rpc(
+            "tools/call",
+            {"name": "bookbridge_get_annotations", "arguments": {"book_id": book_id}},
+        ),
+    )
+    assert r.status_code == 200
+    result = json.loads(r.json()["result"]["content"][0]["text"])
+    assert "annotations" in result
+    assert len(result["annotations"]) == 1
+
+
+def test_bookbridge_get_annotations_missing_book_id(client):
+    r = client.post(
+        "/mcp",
+        json=_rpc(
+            "tools/call",
+            {"name": "bookbridge_get_annotations", "arguments": {}},
+        ),
+    )
+    assert r.status_code == 200
+    result = json.loads(r.json()["result"]["content"][0]["text"])
+    assert "error" in result
+
+
+# ── summarize tool ────────────────────────────────────────────────────────────
+
+
+def test_bookbridge_summarize(client, book_id):
+    r = client.post(
+        "/mcp",
+        json=_rpc(
+            "tools/call",
+            {
+                "name": "bookbridge_summarize",
+                "arguments": {"book_id": book_id, "page_start": 10, "page_end": 10},
+            },
+        ),
+    )
+    assert r.status_code == 200
+    result = json.loads(r.json()["result"]["content"][0]["text"])
+    assert "summary" in result
+
+
+def test_bookbridge_summarize_bad_book(client):
+    r = client.post(
+        "/mcp",
+        json=_rpc(
+            "tools/call",
+            {
+                "name": "bookbridge_summarize",
+                "arguments": {"book_id": "nonexistent", "page_start": 1, "page_end": 1},
+            },
+        ),
+    )
+    assert r.status_code == 200
+    result = json.loads(r.json()["result"]["content"][0]["text"])
+    assert "error" in result
+
+
+# ── flashcards tool ───────────────────────────────────────────────────────────
+
+
+def test_bookbridge_flashcards(client, book_id):
+    r = client.post(
+        "/mcp",
+        json=_rpc(
+            "tools/call",
+            {"name": "bookbridge_flashcards", "arguments": {"book_id": book_id}},
+        ),
+    )
+    assert r.status_code == 200
+    result = json.loads(r.json()["result"]["content"][0]["text"])
+    assert "flashcards" in result
+    assert "book_id" in result
+
+
+def test_bookbridge_flashcards_bad_book(client):
+    r = client.post(
+        "/mcp",
+        json=_rpc(
+            "tools/call",
+            {"name": "bookbridge_flashcards", "arguments": {"book_id": "nonexistent"}},
+        ),
+    )
+    assert r.status_code == 200
+    result = json.loads(r.json()["result"]["content"][0]["text"])
+    assert "error" in result

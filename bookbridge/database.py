@@ -626,6 +626,51 @@ def get_index_job(conn: sqlite3.Connection, job_id: str) -> Optional[dict]:
     return d
 
 
+# ── annotations ──────────────────────────────────────────────────────────────
+
+def create_annotation(
+    conn: sqlite3.Connection,
+    book_id: str,
+    page: int,
+    highlight_text: str = "",
+    note: str = "",
+    color: str = "",
+    source: str = "",
+) -> str:
+    ann_id = _new_id()
+    conn.execute(
+        """
+        INSERT INTO annotations
+            (id, book_id, page, highlight_text, note, color, source, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (ann_id, book_id, page, highlight_text, note, color, source, _now()),
+    )
+    return ann_id
+
+
+def list_annotations(
+    conn: sqlite3.Connection,
+    book_id: Optional[str] = None,
+    page_start: Optional[int] = None,
+    page_end: Optional[int] = None,
+) -> list[dict]:
+    sql = "SELECT * FROM annotations WHERE 1=1"
+    params: list = []
+    if book_id:
+        sql += " AND book_id=?"
+        params.append(book_id)
+    if page_start is not None:
+        sql += " AND page >= ?"
+        params.append(page_start)
+    if page_end is not None:
+        sql += " AND page <= ?"
+        params.append(page_end)
+    sql += " ORDER BY created_at DESC"
+    rows = conn.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
+
+
 # ── stats ─────────────────────────────────────────────────────────────────────
 
 def get_stats(conn: sqlite3.Connection) -> dict:

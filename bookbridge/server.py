@@ -23,6 +23,7 @@ from .citation import format_citation
 from .config import DB_PATH, HTTP_HOST, HTTP_PORT
 from .database import (
     _connect,
+    create_annotation,
     create_index_job,
     get_book,
     get_chunks_for_book,
@@ -31,6 +32,7 @@ from .database import (
     get_stats,
     init_db,
     insert_activity_reference,
+    list_annotations,
     list_books,
     search_equations_fts,
     search_figures_fts,
@@ -39,6 +41,7 @@ from .database import (
 )
 from .indexer import index_book, load_cached_book
 from .search import search as do_search
+from .summarize import generate_flashcards, summarize_content
 
 # ── global DB connection state (thread-local connections, WAL mode) ─────────
 
@@ -177,6 +180,23 @@ class AddBookRequest(BaseModel):
     subject_areas: Optional[list[str]] = []
     tags: Optional[list[str]] = []
     allowed_agents: Optional[list[str]] = []
+
+
+class CreateAnnotationRequest(BaseModel):
+    book_id: str
+    page: int = Field(..., ge=1)
+    highlight_text: Optional[str] = ""
+    note: Optional[str] = ""
+    color: Optional[str] = ""
+    source: Optional[str] = ""
+
+
+class SummarizeRequest(BaseModel):
+    book_id: str
+    page_start: int = Field(1, ge=1)
+    page_end: int = Field(1, ge=1)
+    max_sentences: int = Field(5, ge=1, le=20)
+    query: Optional[str] = None
 
 
 # ── endpoints ─────────────────────────────────────────────────────────────────
@@ -504,11 +524,57 @@ def book_detail(book_id: str):
 
 @app.get("/annotations")
 def annotations(
-    book_id: Optional[str] = Query(None),
+    book_id: str = Query(...),
     page_start: Optional[int] = Query(None),
     page_end: Optional[int] = Query(None),
 ):
-    raise HTTPException(status_code=403, detail="Annotation sync not enabled")
+    conn = get_db()
+    results = list_annotations(conn, book_id=book_id, page_start=page_start, page_end=page_end)
+    return results
+
+
+@app.post("/annotations", status_code=201)
+def create_annotation_endpoint(req: CreateAnnotationRequest):
+    conn = get_db()
+    book = get_book(conn, req.book_id)
+    if book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+    with conn:
+        ann_id = create_annotation(
+            conn,
+            book_id=req.book_id,
+            page=req.page,
+            highlight_text=req.highlight_text or "",
+            note=req.note or "",
+            color=req.color or "",
+            source=req.source or "",
+        )
+    return {"annotation_id": ann_id}
+
+
+@app.post("/summarize")
+def summarize(req: SummarizeRequest):
+    conn = get_db()
+    result = summarize_content(
+        conn,
+        book_id=req.book_id,
+        page_start=req.page_start,
+        page_end=req.page_end,
+        max_sentences=req.max_sentences,
+        query=req.query,
+    )
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@app.get("/books/{book_id}/flashcards")
+def flashcards(book_id: str, max_cards: int = Query(20, ge=1, le=100)):
+    conn = get_db()
+    result = generate_flashcards(conn, book_id=book_id, max_cards=max_cards)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
 
 
 # ── entry point ───────────────────────────────────────────────────────────────

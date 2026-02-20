@@ -330,3 +330,115 @@ def test_graph_related(client, book_id):
     data = r.json()
     assert "nodes" in data
     assert "edges" in data
+
+
+# ── annotations ───────────────────────────────────────────────────────────────
+
+
+def test_annotations_empty(client, book_id):
+    r = client.get(f"/annotations?book_id={book_id}")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+def test_annotations_requires_book_id(client):
+    r = client.get("/annotations")
+    assert r.status_code == 422
+
+
+def test_create_and_list_annotation(client, book_id):
+    r = client.post(
+        "/annotations",
+        json={
+            "book_id": book_id,
+            "page": 3,
+            "highlight_text": "Newton's first law states...",
+            "note": "Key definition",
+            "color": "yellow",
+            "source": "test-agent",
+        },
+    )
+    assert r.status_code == 201
+    data = r.json()
+    assert "annotation_id" in data
+
+    r2 = client.get(f"/annotations?book_id={book_id}")
+    assert r2.status_code == 200
+    annotations = r2.json()
+    assert len(annotations) == 1
+    assert annotations[0]["highlight_text"] == "Newton's first law states..."
+    assert annotations[0]["page"] == 3
+
+
+def test_create_annotation_book_not_found(client):
+    r = client.post(
+        "/annotations",
+        json={"book_id": "nonexistent-id", "page": 1, "note": "test"},
+    )
+    assert r.status_code == 404
+
+
+def test_annotations_filter_page_range(client, book_id):
+    # Create two annotations at different pages via the API
+    client.post("/annotations", json={"book_id": book_id, "page": 2, "note": "early"})
+    client.post("/annotations", json={"book_id": book_id, "page": 8, "note": "late"})
+
+    r = client.get(f"/annotations?book_id={book_id}&page_start=1&page_end=5")
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data) == 1
+    assert data[0]["note"] == "early"
+
+
+# ── summarize ─────────────────────────────────────────────────────────────────
+
+
+def test_summarize(client, book_id):
+    r = client.post(
+        "/summarize",
+        json={"book_id": book_id, "page_start": 1, "page_end": 1, "max_sentences": 3},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert "summary" in data
+    assert data["book_id"] == book_id
+
+
+def test_summarize_with_query(client, book_id):
+    r = client.post(
+        "/summarize",
+        json={
+            "book_id": book_id,
+            "page_start": 1,
+            "page_end": 1,
+            "max_sentences": 2,
+            "query": "Newton laws motion",
+        },
+    )
+    assert r.status_code == 200
+    assert "summary" in r.json()
+
+
+def test_summarize_not_found(client):
+    r = client.post(
+        "/summarize",
+        json={"book_id": "nonexistent", "page_start": 1, "page_end": 1},
+    )
+    assert r.status_code == 404
+
+
+# ── flashcards ────────────────────────────────────────────────────────────────
+
+
+def test_flashcards(client, book_id):
+    r = client.get(f"/books/{book_id}/flashcards")
+    assert r.status_code == 200
+    data = r.json()
+    assert "flashcards" in data
+    assert data["book_id"] == book_id
+    assert "total_generated" in data
+
+
+def test_flashcards_not_found(client):
+    r = client.get("/books/nonexistent-id/flashcards")
+    assert r.status_code == 404

@@ -16,6 +16,8 @@ from bookbridge.database import (
     insert_equation,
     insert_figure,
     insert_activity_reference,
+    create_annotation,
+    list_annotations,
     get_stats,
     create_index_job,
     get_index_job,
@@ -220,3 +222,48 @@ def test_graph_edges(db):
     nodes, edges = get_related_nodes(db, book_id1)
     edge_pairs = {(e["from_id"], e["to_id"]) for e in edges}
     assert (book_id1, book_id2) in edge_pairs
+
+
+# ── annotations ───────────────────────────────────────────────────────────────
+
+
+def test_create_annotation(db):
+    with db:
+        book_id = upsert_book(db, _sample_book())
+        ann_id = create_annotation(
+            db,
+            book_id=book_id,
+            page=5,
+            highlight_text="Important passage",
+            note="Remember this for the exam",
+            color="yellow",
+            source="agent-001",
+        )
+    row = db.execute("SELECT * FROM annotations WHERE id=?", (ann_id,)).fetchone()
+    assert row is not None
+    assert row["page"] == 5
+    assert row["highlight_text"] == "Important passage"
+    assert row["note"] == "Remember this for the exam"
+
+
+def test_list_annotations_filter_book(db):
+    with db:
+        book_id = upsert_book(db, _sample_book())
+        book_id2 = upsert_book(db, _sample_book({"title": "Other Book"}))
+        create_annotation(db, book_id=book_id, page=1, highlight_text="First note")
+        create_annotation(db, book_id=book_id, page=3, highlight_text="Second note")
+        create_annotation(db, book_id=book_id2, page=1, highlight_text="Other note")
+    results = list_annotations(db, book_id=book_id)
+    assert len(results) == 2
+    assert all(r["book_id"] == book_id for r in results)
+
+
+def test_list_annotations_filter_page_range(db):
+    with db:
+        book_id = upsert_book(db, _sample_book())
+        create_annotation(db, book_id=book_id, page=2, highlight_text="Early page")
+        create_annotation(db, book_id=book_id, page=5, highlight_text="Mid page")
+        create_annotation(db, book_id=book_id, page=10, highlight_text="Late page")
+    results = list_annotations(db, book_id=book_id, page_start=3, page_end=7)
+    assert len(results) == 1
+    assert results[0]["highlight_text"] == "Mid page"
