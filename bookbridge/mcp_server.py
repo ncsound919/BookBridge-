@@ -24,17 +24,20 @@ from .citation import format_citation
 from .config import DB_PATH, MCP_HOST, MCP_PORT
 from .database import (
     _connect,
+    create_annotation,
     get_book,
     get_related_nodes,
     get_stats,
     init_db,
     insert_activity_reference,
+    list_annotations,
     list_books,
     search_equations_fts,
     search_figures_fts,
 )
 from .indexer import load_cached_book
 from .search import search as do_search, _fts_escape
+from .summarize import generate_flashcards, summarize_content
 
 # ── DB connection ─────────────────────────────────────────────────────────────
 
@@ -254,6 +257,71 @@ TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "name": "bookbridge_annotate",
+        "description": (
+            "Save a highlight or note on a specific page of a book. "
+            "Annotations are persisted locally and can be retrieved later with bookbridge_get_annotations."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "book_id": {"type": "string"},
+                "page": {"type": "integer", "minimum": 1},
+                "highlight_text": {"type": "string", "description": "The highlighted passage text"},
+                "note": {"type": "string", "description": "User or agent note about the passage"},
+                "color": {"type": "string", "description": "Highlight color label, e.g. 'yellow'"},
+                "source": {"type": "string", "description": "Who or what created the annotation"},
+            },
+            "required": ["book_id", "page"],
+        },
+    },
+    {
+        "name": "bookbridge_get_annotations",
+        "description": "Retrieve annotations (highlights and notes) for a book, optionally filtered by page range.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "book_id": {"type": "string"},
+                "page_start": {"type": "integer", "minimum": 1},
+                "page_end": {"type": "integer", "minimum": 1},
+            },
+            "required": ["book_id"],
+        },
+    },
+    {
+        "name": "bookbridge_summarize",
+        "description": (
+            "Generate an extractive summary of a page range from a book. "
+            "Provide an optional query to focus the summary on a specific topic."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "book_id": {"type": "string"},
+                "page_start": {"type": "integer", "minimum": 1},
+                "page_end": {"type": "integer", "minimum": 1},
+                "max_sentences": {"type": "integer", "default": 5, "minimum": 1, "maximum": 20},
+                "query": {"type": "string", "description": "Optional topic to focus the summary on"},
+            },
+            "required": ["book_id", "page_start", "page_end"],
+        },
+    },
+    {
+        "name": "bookbridge_flashcards",
+        "description": (
+            "Generate study flashcards from a book's indexed content. "
+            "Returns term/definition pairs, equation cards, and key-concept cards."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "book_id": {"type": "string"},
+                "max_cards": {"type": "integer", "default": 20, "minimum": 1, "maximum": 100},
+            },
+            "required": ["book_id"],
+        },
+    },
 ]
 
 # ── tool dispatch ─────────────────────────────────────────────────────────────
@@ -471,6 +539,52 @@ def _tool_list_books(args: dict) -> dict:
     }
 
 
+def _tool_annotate(args: dict) -> dict:
+    conn = get_db()
+    book = get_book(conn, args["book_id"])
+    if book is None:
+        return {"error": f"Book not found: {args['book_id']}"}
+    with conn:
+        ann_id = create_annotation(
+            conn,
+            book_id=args["book_id"],
+            page=args["page"],
+            highlight_text=args.get("highlight_text", ""),
+            note=args.get("note", ""),
+            color=args.get("color", ""),
+            source=args.get("source", ""),
+        )
+    return {"annotation_id": ann_id, "status": "created"}
+
+
+def _tool_get_annotations(args: dict) -> dict:
+    conn = get_db()
+    annotations = list_annotations(
+        conn,
+        book_id=args.get("book_id"),
+        page_start=args.get("page_start"),
+        page_end=args.get("page_end"),
+    )
+    return {"annotations": annotations}
+
+
+def _tool_summarize(args: dict) -> dict:
+    conn = get_db()
+    return summarize_content(
+        conn,
+        book_id=args["book_id"],
+        page_start=args.get("page_start", 1),
+        page_end=args.get("page_end", 1),
+        max_sentences=args.get("max_sentences", 5),
+        query=args.get("query"),
+    )
+
+
+def _tool_flashcards(args: dict) -> dict:
+    conn = get_db()
+    return generate_flashcards(conn, book_id=args["book_id"], max_cards=args.get("max_cards", 20))
+
+
 _TOOL_DISPATCH = {
     "bookbridge_search": _tool_search,
     "bookbridge_retrieve": _tool_retrieve,
@@ -481,6 +595,10 @@ _TOOL_DISPATCH = {
     "bookbridge_cite": _tool_cite,
     "bookbridge_link_activity": _tool_link_activity,
     "bookbridge_list_books": _tool_list_books,
+    "bookbridge_annotate": _tool_annotate,
+    "bookbridge_get_annotations": _tool_get_annotations,
+    "bookbridge_summarize": _tool_summarize,
+    "bookbridge_flashcards": _tool_flashcards,
 }
 
 # ── MCP FastAPI app ───────────────────────────────────────────────────────────
