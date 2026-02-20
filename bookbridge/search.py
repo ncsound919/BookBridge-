@@ -6,8 +6,6 @@ import json
 import sqlite3
 from typing import Optional
 
-import numpy as np
-
 from .database import get_all_chunks_with_embeddings, get_book
 from .embedder import get_embedder
 
