@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import math
 import re
-import struct
 from collections import Counter
 from typing import Optional
 
