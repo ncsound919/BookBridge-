@@ -296,9 +296,19 @@ def _tool_retrieve(args: dict) -> dict:
 
 def _tool_equations(args: dict) -> dict:
     conn = get_db()
-    rows = search_equations_fts(
-        conn, args["query"], book_ids=args.get("book_ids"), max_results=args.get("max_results", 5)
-    )
+    # Escape the query for use in FTS5 MATCH to avoid malformed syntax issues
+    raw_query = args.get("query", "")
+    safe_query = _fts_escape(raw_query) if raw_query is not None else ""
+    try:
+        rows = search_equations_fts(
+            conn,
+            safe_query,
+            book_ids=args.get("book_ids"),
+            max_results=args.get("max_results", 5),
+        )
+    except sqlite3.OperationalError as e:
+        # Return a structured error response instead of surfacing a raw DB error
+        return {"error": f"Invalid equation search query: {e}"}
     results = []
     for r in rows:
         book = get_book(conn, r["book_id"])
