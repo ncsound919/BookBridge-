@@ -199,10 +199,6 @@ class SummarizeRequest(BaseModel):
     query: Optional[str] = None
 
 
-class FlashcardsRequest(BaseModel):
-    max_cards: int = Field(20, ge=1, le=100)
-
-
 # ── endpoints ─────────────────────────────────────────────────────────────────
 
 
