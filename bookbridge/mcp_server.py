@@ -321,13 +321,19 @@ def _tool_equations(args: dict) -> dict:
 
 def _tool_figures(args: dict) -> dict:
     conn = get_db()
-    rows = search_figures_fts(
-        conn,
-        args["query"],
-        result_type=args.get("result_type", "both"),
-        book_ids=args.get("book_ids"),
-        max_results=args.get("max_results", 5),
-    )
+    # Escape the FTS query to avoid malformed MATCH expressions and handle DB errors gracefully.
+    safe_query = _fts_escape(args["query"])
+    try:
+        rows = search_figures_fts(
+            conn,
+            safe_query,
+            result_type=args.get("result_type", "both"),
+            book_ids=args.get("book_ids"),
+            max_results=args.get("max_results", 5),
+        )
+    except sqlite3.OperationalError as exc:
+        # Return a structured response instead of letting the error propagate.
+        return {"results": [], "error": "Invalid full-text search query", "details": str(exc)}
     results = []
     for r in rows:
         book = get_book(conn, r["book_id"])
