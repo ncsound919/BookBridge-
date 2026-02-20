@@ -48,7 +48,7 @@ def summarize_content(
     else:
         pages = load_cached_book(book_id)
         if pages is None:
-            return {"error": "Content not available (book not indexed)"}
+            return {"error": "Content not available (not indexed)"}
         text = " ".join(pages[max(0, page_start - 1) : page_end])
 
     sentences = _sentence_split(text)

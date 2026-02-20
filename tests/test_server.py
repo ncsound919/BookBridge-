@@ -341,6 +341,11 @@ def test_annotations_empty(client, book_id):
     assert r.json() == []
 
 
+def test_annotations_requires_book_id(client):
+    r = client.get("/annotations")
+    assert r.status_code == 422
+
+
 def test_create_and_list_annotation(client, book_id):
     r = client.post(
         "/annotations",

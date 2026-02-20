@@ -354,7 +354,7 @@ def _tool_retrieve(args: dict) -> dict:
     else:
         pages = load_cached_book(args["book_id"])
         if pages is None:
-            return {"error": "Content not available (book not indexed)"}
+            return {"error": "Content not available (not indexed)"}
         text = "\n\n".join(pages[max(0, page_start - 1) : page_end])
     return {"book_id": args["book_id"], "page_start": page_start, "page_end": page_end, "text": text}
 
@@ -559,7 +559,9 @@ def _tool_annotate(args: dict) -> dict:
 
 def _tool_get_annotations(args: dict) -> dict:
     conn = get_db()
-    book_id = args["book_id"]
+    book_id = args.get("book_id")
+    if not book_id:
+        return {"error": "book_id is required"}
     book = get_book(conn, book_id)
     if book is None:
         return {"error": f"Book not found: {book_id}"}

@@ -286,6 +286,19 @@ def test_bookbridge_get_annotations(client, book_id):
     assert len(result["annotations"]) == 1
 
 
+def test_bookbridge_get_annotations_missing_book_id(client):
+    r = client.post(
+        "/mcp",
+        json=_rpc(
+            "tools/call",
+            {"name": "bookbridge_get_annotations", "arguments": {}},
+        ),
+    )
+    assert r.status_code == 200
+    result = json.loads(r.json()["result"]["content"][0]["text"])
+    assert "error" in result
+
+
 # ── summarize tool ────────────────────────────────────────────────────────────
 
 

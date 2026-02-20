@@ -524,7 +524,7 @@ def book_detail(book_id: str):
 
 @app.get("/annotations")
 def annotations(
-    book_id: Optional[str] = Query(None),
+    book_id: str = Query(...),
     page_start: Optional[int] = Query(None),
     page_end: Optional[int] = Query(None),
 ):
