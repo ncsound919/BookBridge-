@@ -317,13 +317,17 @@ def equations(req: EquationsRequest):
 @app.post("/figures")
 def figures(req: FiguresRequest):
     conn = get_db()
-    rows = search_figures_fts(
-        conn,
-        req.query,
-        result_type=req.result_type,
-        book_ids=req.book_ids,
-        max_results=req.max_results,
-    )
+    try:
+        rows = search_figures_fts(
+            conn,
+            req.query,
+            result_type=req.result_type,
+            book_ids=req.book_ids,
+            max_results=req.max_results,
+        )
+    except sqlite3.OperationalError as exc:
+        # Handle malformed FTS5 queries gracefully instead of returning 500
+        raise HTTPException(status_code=400, detail=f"Malformed search query: {exc}") from exc
     results = []
     for r in rows:
         book = get_book(conn, r["book_id"])
