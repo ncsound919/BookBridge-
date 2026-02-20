@@ -609,10 +609,10 @@ def create_index_job(conn: sqlite3.Connection, book_ids: list) -> str:
     return job_id
 
 
-def update_index_job(conn: sqlite3.Connection, job_id: str, status: str, progress: dict = {}) -> None:
+def update_index_job(conn: sqlite3.Connection, job_id: str, status: str, progress: Optional[dict] = None) -> None:
     conn.execute(
         "UPDATE index_jobs SET status=?, updated_at=?, progress_json=? WHERE id=?",
-        (status, _now(), _json(progress), job_id),
+        (status, _now(), _json(progress if progress is not None else {}), job_id),
     )
 
 

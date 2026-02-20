@@ -125,9 +125,11 @@ def _passes_filters(book: dict, filters: Optional[dict]) -> bool:
         year = book.get("year") or 0
         if year < year_range[0] or year > year_range[1]:
             return False
-    if filters.get("library_labels"):
-        # Not stored per book in this implementation; skip
-        pass
+    if filters.get("subject_areas"):
+        book_subjects = [s.lower() for s in book.get("subject_areas", [])]
+        filter_terms = [s.lower() for s in filters["subject_areas"]]
+        if not any(f in bs for f in filter_terms for bs in book_subjects):
+            return False
     return True
 
 
@@ -221,7 +223,7 @@ def _format_keyword_results(conn, raw, max_results, allowed_books):
                 "page_start": r["page_start"],
                 "page_end": r["page_end"],
                 "text": r["text"],
-                "score": abs(float(r.get("bm25_score") or 0)),
+                "score": -float(r.get("bm25_score") or 0),
                 "citation_ready": _make_citation(book, r["page_start"], r["page_end"]),
                 "drive_web_view_link": r.get("drive_web_view_link", ""),
                 "result_type": "text",
@@ -261,7 +263,9 @@ def _merge_hybrid(conn, kw_raw, sem_raw, max_results, allowed_books):
     seen: set = set()
     merged = []
 
-    # Normalise keyword scores (BM25 is negative in SQLite, take abs)
+    # Normalise keyword scores: SQLite bm25() returns negative values where
+    # more-negative = better match. Negate so higher = better, matching the
+    # direction of cosine similarity scores used for semantic results.
     for r in kw_raw:
         cid = r.get("chunk_id") or r.get("id", "")
         if cid in seen:
@@ -281,7 +285,7 @@ def _merge_hybrid(conn, kw_raw, sem_raw, max_results, allowed_books):
                 "page_start": r["page_start"],
                 "page_end": r["page_end"],
                 "text": r["text"],
-                "score": abs(float(r.get("bm25_score") or 0)),
+                "score": -float(r.get("bm25_score") or 0),
                 "citation_ready": _make_citation(book, r["page_start"], r["page_end"]),
                 "drive_web_view_link": r.get("drive_web_view_link", ""),
                 "result_type": "text",

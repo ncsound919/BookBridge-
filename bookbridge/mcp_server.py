@@ -14,12 +14,10 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
 
 from . import __version__
 from .citation import format_citation
@@ -40,16 +38,15 @@ from .search import search as do_search, _fts_escape
 
 # ── DB connection ─────────────────────────────────────────────────────────────
 
-_db_conn: Optional[sqlite3.Connection] = None
-_db_lock = threading.Lock()
+_db_state = threading.local()
 
 
 def get_db() -> sqlite3.Connection:
-    global _db_conn
-    if _db_conn is None:
+    """Return a per-thread SQLite connection, creating one if needed."""
+    if not hasattr(_db_state, "conn") or _db_state.conn is None:
         init_db(DB_PATH)
-        _db_conn = _connect(DB_PATH)
-    return _db_conn
+        _db_state.conn = _connect(DB_PATH)
+    return _db_state.conn
 
 
 # ── MCP tool definitions ──────────────────────────────────────────────────────

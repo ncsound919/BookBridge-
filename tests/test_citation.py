@@ -69,6 +69,20 @@ def test_bibtex_multiple_authors():
     assert "and" in cite  # authors joined with " and "
 
 
+def test_bibtex_trailing_comma_correctness():
+    """Every field except the last one must have a trailing comma."""
+    cite, _ = format_citation(SAMPLE_BOOK, "BibTeX")
+    lines = cite.strip().split("\n")
+    # Remove the opening @book{ line and the closing }
+    field_lines = [l for l in lines if l.startswith("  ")]
+    # All field lines except the last must end with a comma
+    for line in field_lines[:-1]:
+        assert line.rstrip().endswith(","), f"Expected trailing comma: {line!r}"
+    # The last field line must NOT end with a comma
+    assert not field_lines[-1].rstrip().endswith(","), \
+        f"Last field should not have trailing comma: {field_lines[-1]!r}"
+
+
 def test_vancouver():
     cite, _ = format_citation(SAMPLE_BOOK, "Vancouver")
     assert "Griffiths" in cite

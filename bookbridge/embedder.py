@@ -1,13 +1,17 @@
-"""Lightweight text embedder using TF-IDF vectors stored as numpy arrays.
+"""Lightweight text embedder using hashed TF vectors stored as numpy arrays.
 
 No heavy ML dependencies: uses numpy and Python's standard library.
 Provides cosine-similarity-based semantic search as a stand-in for
 a full sentence-transformer while keeping the package portable.
+
+Embeddings are fully deterministic and reproducible across process restarts:
+token → dimension mapping uses MD5 (not Python's PYTHONHASHSEED-randomised
+``hash()``), and term-frequency weights require no corpus ``fit()`` step.
 """
 
 from __future__ import annotations
 
-import math
+import hashlib
 import re
 from collections import Counter
 from typing import Optional
@@ -36,30 +40,25 @@ def tokenise(text: str) -> list[str]:
 # ── vocabulary / IDF table ────────────────────────────────────────────────────
 
 class Embedder:
-    """TF-IDF-inspired dense vector embedder.
+    """Hashed TF dense vector embedder.
 
-    Vocabulary is built lazily from ingested documents and hashed into a
-    fixed-size ``EMBEDDING_DIMENSIONS``-dimensional space so that the
-    model never needs re-training when new books are added.
+    Each token is mapped to a dimension via MD5 (stable across restarts,
+    unlike Python's ``hash()`` which is randomised by PYTHONHASHSEED).
+    Weights are plain term-frequency — no IDF step is needed, so stored
+    embeddings stay valid across process restarts without persisting any
+    corpus statistics.
     """
 
     def __init__(self, dims: int = EMBEDDING_DIMENSIONS) -> None:
         self.dims = dims
-        # IDF weights: token -> log(1 + N / (1 + df))
-        self._doc_freq: Counter = Counter()
-        self._total_docs: int = 0
 
     # ── public API ────────────────────────────────────────────────────────────
 
     def fit(self, texts: list[str]) -> None:
-        """Update IDF table from a batch of documents."""
-        self._total_docs += len(texts)
-        for text in texts:
-            unique_tokens = set(tokenise(text))
-            self._doc_freq.update(unique_tokens)
+        """No-op kept for API compatibility. Embeddings are IDF-free."""
 
     def embed(self, text: str) -> np.ndarray:
-        """Return a normalised dense embedding vector for *text*."""
+        """Return a normalised dense TF embedding vector for *text*."""
         tokens = tokenise(text)
         if not tokens:
             return np.zeros(self.dims, dtype=np.float32)
@@ -70,12 +69,9 @@ class Embedder:
 
         for token, count in tf.items():
             tf_score = count / n_tokens
-            df = self._doc_freq.get(token, 0)
-            idf = math.log(1.0 + (self._total_docs + 1) / (df + 1))
-            weight = tf_score * idf
-            # Hash token into dims-dimensional space
-            idx = hash(token) % self.dims
-            vec[idx] += weight
+            # Use MD5 for a stable, PYTHONHASHSEED-independent token → index mapping
+            idx = int(hashlib.md5(token.encode()).hexdigest(), 16) % self.dims
+            vec[idx] += tf_score
 
         norm = np.linalg.norm(vec)
         if norm > 0:

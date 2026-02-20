@@ -116,22 +116,21 @@ def format_citation(
         first_author = authors[0].split()[-1].lower() if authors else "unknown"
         bibtex_key = f"{first_author}{year}"
         author_bibtex = " and ".join(authors)
-        lines = [
-            f"@book{{{bibtex_key},",
-            f"  author = {{{author_bibtex}}},",
-            f"  title = {{{title}}},",
+        fields = [
+            f"  author = {{{author_bibtex}}}",
+            f"  title = {{{title}}}",
             f"  year = {{{year}}}",
         ]
         if publisher:
-            lines.append(f"  publisher = {{{publisher}}},")
+            fields.append(f"  publisher = {{{publisher}}}")
         if isbn:
-            lines.append(f"  isbn = {{{isbn}}},")
+            fields.append(f"  isbn = {{{isbn}}}")
         if doi:
-            lines.append(f"  doi = {{{doi}}},")
+            fields.append(f"  doi = {{{doi}}}")
         if edition:
-            lines.append(f"  edition = {{{edition}}},")
-        lines.append("}")
-        return "\n".join(lines), bibtex_key
+            fields.append(f"  edition = {{{edition}}}")
+        body = ",\n".join(fields)
+        return f"@book{{{bibtex_key},\n{body}\n}}", bibtex_key
 
     if style == "VANCOUVER":
         author_str = "; ".join(authors) if authors else "Unknown"

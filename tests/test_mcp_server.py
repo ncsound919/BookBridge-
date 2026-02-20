@@ -22,14 +22,13 @@ def isolated_db(tmp_path, monkeypatch):
 
     init_db(db_path)
     conn = _connect(db_path)
-    monkeypatch.setattr(mcp_mod, "_db_conn", conn)
+    monkeypatch.setattr(mcp_mod, "get_db", lambda: conn)
 
     import bookbridge.embedder as emb_mod
     monkeypatch.setattr(emb_mod, "_embedder", None)
 
     yield conn
     conn.close()
-    monkeypatch.setattr(mcp_mod, "_db_conn", None)
 
 
 @pytest.fixture

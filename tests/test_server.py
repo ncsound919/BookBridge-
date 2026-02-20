@@ -25,7 +25,8 @@ def isolated_db(tmp_path, monkeypatch):
 
     init_db(db_path)
     conn = _connect(db_path)
-    monkeypatch.setattr(srv_mod, "_db_conn", conn)
+    # Inject the test connection by replacing the get_db callable
+    monkeypatch.setattr(srv_mod, "get_db", lambda: conn)
 
     # Reset embedder
     import bookbridge.embedder as emb_mod
@@ -33,7 +34,6 @@ def isolated_db(tmp_path, monkeypatch):
 
     yield conn
     conn.close()
-    monkeypatch.setattr(srv_mod, "_db_conn", None)
 
 
 @pytest.fixture
@@ -115,6 +115,27 @@ def test_list_books_filter_tag(client, book_id):
     r = client.get("/books?tag=nonexistent")
     assert r.status_code == 200
     assert len(r.json()) == 0
+
+
+def test_list_books_filter_subject_area(client, book_id):
+    r = client.get("/books?subject_area=physics")
+    assert r.status_code == 200
+    assert len(r.json()) == 1
+
+    r = client.get("/books?subject_area=biology")
+    assert r.status_code == 200
+    assert len(r.json()) == 0
+
+
+def test_search_with_subject_area_filter(client, book_id):
+    r = client.post(
+        "/search",
+        json={
+            "query": "Newton laws",
+            "filters": {"subject_areas": ["physics"]},
+        },
+    )
+    assert r.status_code == 200
 
 
 # ── search ────────────────────────────────────────────────────────────────────

@@ -43,20 +43,28 @@ def test_embedder_shape():
 def test_embedder_normalised():
     import numpy as np
     emb = Embedder(dims=128)
-    emb.fit(["heat equation", "wave mechanics"])
     vec = emb.embed("heat equation")
     assert abs(np.linalg.norm(vec) - 1.0) < 1e-5
 
 
 def test_embedder_similarity():
     emb = Embedder()
-    emb.fit(["heat diffusion", "wave mechanics", "quantum physics"])
     v1 = emb.embed("heat equation diffusion")
     v2 = emb.embed("diffusion heat")
     v3 = emb.embed("completely unrelated medieval history")
     sim_related = emb.cosine(v1, v2)
     sim_unrelated = emb.cosine(v1, v3)
     assert sim_related > sim_unrelated
+
+
+def test_embedder_stable_across_instances():
+    """Two fresh Embedder instances must produce identical vectors (no PYTHONHASHSEED dependency)."""
+    import numpy as np
+    emb1 = Embedder()
+    emb2 = Embedder()
+    v1 = emb1.embed("quantum mechanics wave function")
+    v2 = emb2.embed("quantum mechanics wave function")
+    assert np.allclose(v1, v2), "Embeddings differ between instances — hash instability detected"
 
 
 def test_embedder_roundtrip():

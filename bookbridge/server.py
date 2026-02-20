@@ -7,17 +7,15 @@ The MCP server is implemented in ``bookbridge.mcp_server`` and is started
 via its own entry point."""
 from __future__ import annotations
 
-import asyncio
 import json
 import sqlite3
 import threading
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import __version__
@@ -25,7 +23,6 @@ from .citation import format_citation
 from .config import DB_PATH, HTTP_HOST, HTTP_PORT
 from .database import (
     _connect,
-    _load,
     create_index_job,
     get_book,
     get_chunks_for_book,
@@ -92,7 +89,6 @@ class SearchFilters(BaseModel):
     tags: Optional[list[str]] = None
     year_range: Optional[list[int]] = Field(None, min_length=2, max_length=2)
     authors: Optional[list[str]] = None
-    library_labels: Optional[list[str]] = None
     subject_areas: Optional[list[str]] = None
 
 
@@ -474,7 +470,6 @@ def books_list(
     author: Optional[str] = Query(None),
     year_from: Optional[int] = Query(None),
     year_to: Optional[int] = Query(None),
-    library_label: Optional[str] = Query(None),
     subject_area: Optional[str] = Query(None),
 ):
     conn = get_db()
