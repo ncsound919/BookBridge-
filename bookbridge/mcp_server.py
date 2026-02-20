@@ -559,9 +559,13 @@ def _tool_annotate(args: dict) -> dict:
 
 def _tool_get_annotations(args: dict) -> dict:
     conn = get_db()
+    book_id = args["book_id"]
+    book = get_book(conn, book_id)
+    if book is None:
+        return {"error": f"Book not found: {book_id}"}
     annotations = list_annotations(
         conn,
-        book_id=args.get("book_id"),
+        book_id=book_id,
         page_start=args.get("page_start"),
         page_end=args.get("page_end"),
     )
