@@ -299,7 +299,19 @@ def list_books(
 
 
 def delete_book_chunks(conn: sqlite3.Connection, book_id: str) -> None:
-    conn.execute("DELETE FROM book_chunks WHERE book_id=?", (book_id,))
+    # Keep external-content FTS index in sync with book_chunks.
+    # Delete FTS rows whose rowid matches rows being removed from book_chunks.
+    with conn:
+        conn.execute(
+            """
+            DELETE FROM book_chunks_fts
+            WHERE rowid IN (
+                SELECT rowid FROM book_chunks WHERE book_id=?
+            )
+            """,
+            (book_id,),
+        )
+        conn.execute("DELETE FROM book_chunks WHERE book_id=?", (book_id,))
 
 
 # ── chunks ────────────────────────────────────────────────────────────────────
