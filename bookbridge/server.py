@@ -302,7 +302,19 @@ def retrieve(req: RetrieveRequest):
 @app.post("/equations")
 def equations(req: EquationsRequest):
     conn = get_db()
-    rows = search_equations_fts(conn, req.query, book_ids=req.book_ids, max_results=req.max_results)
+    try:
+        rows = search_equations_fts(
+            conn,
+            req.query,
+            book_ids=req.book_ids,
+            max_results=req.max_results,
+        )
+    except sqlite3.OperationalError as exc:
+        # Malformed FTS5 query (e.g., bad quotes/operators) should return a 400, not a 500.
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid equation search query: {exc}",
+        )
     results = []
     for r in rows:
         book = get_book(conn, r["book_id"])
