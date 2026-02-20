@@ -1,0 +1,1013 @@
+{
+  "name": "BookBridge IDE",
+  "version": "0.3.0",
+  "description": "IDE extension + local daemon that provides any agent or tool with seamless access to search, retrieve, and cite books stored in Google Drive. v0.3.0 adds OCR for scanned PDFs, offline mode with cached Drive snapshots, agent reading plans, cross-book knowledge graph, LaTeX/equation extraction, per-book access controls, incremental indexing progress streaming, and a dedicated scientific figure/table retrieval pipeline.",
+  "homepage": "https://bookbridge.example.com",
+  "repository": "https://github.com/example/bookbridge",
+  "license": "MIT",
+  "targets": ["VSCode", "Zed", "Cursor", "JetBrains"],
+  "extension_type": "ide_extension + local_http_service + mcp_server",
+  "changelog": {
+    "0.3.0": "Added OCR pipeline, offline cache mode, agent reading plans, cross-book knowledge graph, LaTeX/equation extraction, per-book access controls, incremental index progress SSE, and scientific figure/table retrieval.",
+    "0.2.0": "Added MCP server, streaming chunk retrieval, multi-account, scientific metadata enrichment, annotation sync, change-watch auto-reindex, enhanced agent contract.",
+    "0.1.0": "Initial release: basic indexing and search over single Google Drive account."
+  },
+
+  "permissions": {
+    "google_apis": [
+      "https://www.googleapis.com/auth/drive.readonly",
+      "https://www.googleapis.com/auth/drive.metadata.readonly",
+      "https://www.googleapis.com/auth/drive.appdata"
+    ],
+    "scopes_note": "Read-only access to user-selected Drive folders. drive.appdata is used only to persist BookBridge preferences (no writes to user files)."
+  },
+
+  "auth": {
+    "provider": "google_oauth2",
+    "client_type": "desktop_app",
+    "required_scopes": [
+      "drive.readonly",
+      "drive.metadata.readonly",
+      "drive.appdata"
+    ],
+    "token_storage": "encrypted_local_keyring",
+    "token_refresh": "automatic_background",
+    "consent_flow": "Open browser → Google OAuth → redirect back to local BookBridge server",
+    "multi_account": true,
+    "account_labels_example": ["Personal Library", "Lab Shared Drive", "Institution Library"],
+    "per_book_access_controls": {
+      "enabled": true,
+      "description": "Users can mark individual books as restricted to specific agent IDs or process labels. Restricted books are excluded from agent search/retrieve results unless the requesting agent_or_process_id is on the allowlist.",
+      "storage": "book-level field in books table: allowed_agents (string[])",
+      "default": "all agents allowed unless restricted"
+    }
+  },
+
+  "google_drive_integration": {
+    "library_folders": [
+      {
+        "id": "FOLDER_ID_PLACEHOLDER",
+        "label": "Primary Book Library",
+        "recursive": true,
+        "account": "default"
+      },
+      {
+        "id": "SHARED_DRIVE_FOLDER_PLACEHOLDER",
+        "label": "Lab Shared Library",
+        "recursive": true,
+        "account": "lab",
+        "shared_drive": true
+      }
+    ],
+    "file_types": [
+      "application/pdf",
+      "application/epub+zip",
+      "application/vnd.google-apps.document",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ],
+    "metadata_fields": [
+      "id", "name", "mimeType", "modifiedTime", "createdTime",
+      "owners", "description", "properties", "appProperties",
+      "webViewLink", "fileExtension", "size", "md5Checksum", "parents"
+    ],
+    "change_watch": {
+      "enabled": true,
+      "method": "drive_push_notifications",
+      "poll_interval_fallback_seconds": 300,
+      "on_change_trigger": "selective_reindex"
+    },
+    "offline_cache": {
+      "enabled": true,
+      "description": "When online, the daemon caches a local compressed plaintext snapshot of each indexed book. Search, retrieve, and citation all work offline against this cache. Drive sync resumes automatically when connectivity returns.",
+      "storage_path": "~/.bookbridge/cache/",
+      "format": "gzip-compressed plain text per book",
+      "max_cache_size_mb": 2048,
+      "eviction_policy": "LRU",
+      "user_configurable": true
+    },
+    "api_endpoints": {
+      "list_files": "https://www.googleapis.com/drive/v3/files",
+      "get_file": "https://www.googleapis.com/drive/v3/files/{fileId}",
+      "download_file": "https://www.googleapis.com/drive/v3/files/{fileId}?alt=media",
+      "export_google_doc_as_pdf": "https://www.googleapis.com/drive/v3/files/{fileId}/export?mimeType=application/pdf",
+      "list_changes": "https://www.googleapis.com/drive/v3/changes",
+      "watch_changes": "https://www.googleapis.com/drive/v3/changes/watch"
+    }
+  },
+
+  "local_backend": {
+    "service_name": "bookbridge-daemon",
+    "listen_address": "http://127.0.0.1:8777",
+    "mcp_address": "http://127.0.0.1:8778",
+    "startup_mode": "auto_on_ide_launch",
+    "implementation_language": "Go (for performance and cross-platform binaries)",
+    "dependencies": {
+      "pdf_extraction": "pdftotext (poppler) or custom Go PDF parser",
+      "ocr": "Tesseract 5 via CGo binding (activated automatically for scanned PDFs with no text layer)",
+      "epub_extraction": "go-epub",
+      "equation_extraction": "MathJax-node or custom LaTeX block parser from PDF/EPUB source",
+      "figure_table_extraction": "pdfplumber-style coordinate heuristics or Go PDF content-stream parser",
+      "embedding_model": "sentence-transformers/all-MiniLM-L6-v2 (via ONNX runtime)",
+      "vector_storage": "sqlite3 with sqlite-vec extension or PostgreSQL with pgvector",
+      "graph_storage": "embedded DuckDB or SQLite adjacency table for knowledge graph",
+      "keyring": "system keyring for token encryption"
+    },
+    "endpoints": [
+      {
+        "path": "/health",
+        "method": "GET",
+        "description": "Health check. Returns daemon version, Drive connection status, offline mode state, and index stats.",
+        "response": {
+          "200": {
+            "schema": {
+              "version": "string",
+              "drive_connected": "boolean",
+              "offline_mode": "boolean",
+              "accounts": "int",
+              "books_indexed": "int",
+              "chunks_indexed": "int",
+              "equations_indexed": "int",
+              "figures_indexed": "int",
+              "last_indexed_at": "timestamp"
+            }
+          }
+        }
+      },
+      {
+        "path": "/index",
+        "method": "POST",
+        "description": "Trigger (re)indexing of all or specific Drive book folders.",
+        "request": {
+          "body": {
+            "book_ids": "string[] | null",
+            "force": "boolean",
+            "ocr_fallback": "boolean (default true, enables Tesseract for scanned pages)"
+          }
+        },
+        "response": {
+          "202": {
+            "schema": {
+              "job_id": "string",
+              "status": "string"
+            }
+          },
+          "400": "Invalid request parameters"
+        }
+      },
+      {
+        "path": "/index/progress",
+        "method": "GET",
+        "description": "Stream live indexing progress for a job as server-sent events. Each event reports current book, page, OCR status, and percent complete.",
+        "parameters": [
+          {"name": "job_id", "in": "query", "schema": "string", "required": true}
+        ],
+        "response": {
+          "200": {
+            "content_type": "text/event-stream",
+            "event_schema": {
+              "job_id": "string",
+              "book_id": "string",
+              "book_title": "string",
+              "pages_done": "int",
+              "pages_total": "int",
+              "ocr_active": "boolean",
+              "percent": "float",
+              "status": "indexing | ocr | embedding | done | error"
+            }
+          }
+        }
+      },
+      {
+        "path": "/search",
+        "method": "POST",
+        "description": "Hybrid semantic + keyword search over indexed book chunks. Returns ranked chunks with full provenance.",
+        "request": {
+          "body": {
+            "query": "string (required)",
+            "max_results": "int (default 10)",
+            "min_score": "float (default 0.0)",
+            "search_mode": "hybrid | semantic | keyword (default hybrid)",
+            "include_equations": "boolean (default false, includes matching equation blocks in results)",
+            "include_figures": "boolean (default false, includes matching figure/table captions in results)",
+            "filters": {
+              "book_ids": "string[]",
+              "tags": "string[]",
+              "year_range": "int[2]",
+              "authors": "string[]",
+              "library_labels": "string[]",
+              "subject_areas": "string[]"
+            },
+            "include_context_chunks": "boolean (default false)",
+            "context_window_chunks": "int (default 2)"
+          }
+        },
+        "response": {
+          "200": {
+            "schema": {
+              "results": [
+                {
+                  "chunk_id": "string",
+                  "book_id": "string",
+                  "book_title": "string",
+                  "authors": "string[]",
+                  "year": "int",
+                  "page_start": "int",
+                  "page_end": "int",
+                  "text": "string",
+                  "score": "float",
+                  "citation_ready": "string",
+                  "drive_web_view_link": "string",
+                  "result_type": "text | equation | figure | table"
+                }
+              ],
+              "total_matches": "int",
+              "query_ms": "int"
+            }
+          }
+        }
+      },
+      {
+        "path": "/retrieve",
+        "method": "POST",
+        "description": "Stream full text of a specific chunk or page range to the agent. Serves from offline cache when Drive is unavailable.",
+        "request": {
+          "body": {
+            "book_id": "string (required)",
+            "page_start": "int",
+            "page_end": "int",
+            "chunk_id": "string | null"
+          }
+        },
+        "response": {
+          "200": {
+            "content_type": "text/event-stream"
+          },
+          "400": "Missing book_id or page range"
+        }
+      },
+      {
+        "path": "/equations",
+        "method": "POST",
+        "description": "Search or retrieve equations and LaTeX blocks from indexed books. Returns equation text, LaTeX source (if extractable), page, and citation.",
+        "request": {
+          "body": {
+            "query": "string (required, e.g. 'Navier-Stokes', 'Einstein field equations')",
+            "max_results": "int (default 5)",
+            "book_ids": "string[] | null"
+          }
+        },
+        "response": {
+          "200": {
+            "schema": {
+              "results": [
+                {
+                  "equation_id": "string",
+                  "book_id": "string",
+                  "book_title": "string",
+                  "page": "int",
+                  "latex": "string | null",
+                  "rendered_text": "string",
+                  "section_heading": "string",
+                  "citation_ready": "string"
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "path": "/figures",
+        "method": "POST",
+        "description": "Search figure and table captions from indexed books. Returns caption text, page, figure number, and citation.",
+        "request": {
+          "body": {
+            "query": "string (required, e.g. 'stress-strain curve', 'experimental results table')",
+            "max_results": "int (default 5)",
+            "result_type": "figure | table | both (default both)",
+            "book_ids": "string[] | null"
+          }
+        },
+        "response": {
+          "200": {
+            "schema": {
+              "results": [
+                {
+                  "figure_id": "string",
+                  "book_id": "string",
+                  "book_title": "string",
+                  "page": "int",
+                  "figure_number": "string",
+                  "caption": "string",
+                  "result_type": "figure | table",
+                  "citation_ready": "string",
+                  "drive_web_view_link": "string"
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "path": "/graph/related",
+        "method": "POST",
+        "description": "Query the cross-book knowledge graph to find books, chapters, or passages conceptually related to a given concept, book, or chunk.",
+        "request": {
+          "body": {
+            "seed": {
+              "type": "concept | book_id | chunk_id",
+              "value": "string"
+            },
+            "max_hops": "int (default 2)",
+            "max_results": "int (default 10)"
+          }
+        },
+        "response": {
+          "200": {
+            "schema": {
+              "nodes": [
+                {
+                  "id": "string",
+                  "type": "book | chunk | concept",
+                  "label": "string",
+                  "book_title": "string | null",
+                  "page": "int | null",
+                  "relevance_score": "float"
+                }
+              ],
+              "edges": [
+                {
+                  "from": "string",
+                  "to": "string",
+                  "relation": "cites | defines | extends | contradicts | applies"
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "path": "/reading_plan",
+        "method": "POST",
+        "description": "Generate an ordered agent reading plan for a research topic. Returns a prioritized list of books and passages the agent should read before proceeding, with rationale for each.",
+        "request": {
+          "body": {
+            "topic": "string (required, e.g. 'turbulent flow simulation methods')",
+            "goal": "string (optional, e.g. 'implement a solver', 'write a literature review')",
+            "max_books": "int (default 5)",
+            "max_passages_per_book": "int (default 3)"
+          }
+        },
+        "response": {
+          "200": {
+            "schema": {
+              "plan": [
+                {
+                  "step": "int",
+                  "book_id": "string",
+                  "book_title": "string",
+                  "authors": "string[]",
+                  "rationale": "string",
+                  "passages": [
+                    {
+                      "page_start": "int",
+                      "page_end": "int",
+                      "summary": "string",
+                      "citation_ready": "string"
+                    }
+                  ]
+                }
+              ],
+              "topic": "string",
+              "goal": "string"
+            }
+          }
+        }
+      },
+      {
+        "path": "/citation",
+        "method": "POST",
+        "description": "Generate a formatted citation for a book and optional page/chapter range.",
+        "request": {
+          "body": {
+            "book_id": "string (required)",
+            "style": "APA | MLA | Chicago | BibTeX | Vancouver | IEEE (required)",
+            "page_start": "int | null",
+            "page_end": "int | null",
+            "chapter": "string | null"
+          }
+        },
+        "response": {
+          "200": {
+            "schema": {
+              "citation": "string",
+              "bibtex_key": "string | null"
+            }
+          },
+          "404": "Book not found"
+        }
+      },
+      {
+        "path": "/link_activity",
+        "method": "POST",
+        "description": "Attach book references to an IDE activity (file, notebook cell, experiment run, simulation).",
+        "request": {
+          "body": {
+            "activity_type": "file | notebook_cell | experiment | simulation | run (required)",
+            "activity_id": "string (required)",
+            "agent_or_process_id": "string (optional, for audit)",
+            "references": [
+              {
+                "book_id": "string (required)",
+                "page_start": "int",
+                "page_end": "int",
+                "reason": "string"
+              }
+            ]
+          }
+        },
+        "response": {
+          "201": "Created",
+          "400": "Invalid reference data"
+        }
+      },
+      {
+        "path": "/books",
+        "method": "GET",
+        "description": "List all indexed books. Supports filtering via query parameters.",
+        "parameters": [
+          {"name": "tag", "in": "query", "schema": "string"},
+          {"name": "author", "in": "query", "schema": "string"},
+          {"name": "year_from", "in": "query", "schema": "int"},
+          {"name": "year_to", "in": "query", "schema": "int"},
+          {"name": "library_label", "in": "query", "schema": "string"},
+          {"name": "subject_area", "in": "query", "schema": "string"}
+        ],
+        "response": {
+          "200": {
+            "schema": [
+              {
+                "book_id": "string",
+                "title": "string",
+                "authors": "string[]",
+                "year": "int",
+                "drive_web_view_link": "string"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "path": "/books/{book_id}",
+        "method": "GET",
+        "description": "Get full metadata for a single book including enriched scientific fields.",
+        "response": {
+          "200": {
+            "schema": {
+              "id": "uuid",
+              "drive_file_id": "string",
+              "drive_account": "string",
+              "title": "string",
+              "authors": "string[]",
+              "year": "int",
+              "publisher": "string",
+              "isbn": "string",
+              "doi": "string",
+              "subject_areas": "string[]",
+              "tags": "string[]",
+              "mime_type": "string",
+              "drive_web_view_link": "string",
+              "last_indexed_at": "timestamp",
+              "pages": "int",
+              "hash": "string",
+              "language": "string",
+              "edition": "string",
+              "abstract": "string",
+              "ocr_applied": "boolean",
+              "equations_indexed": "int",
+              "figures_indexed": "int",
+              "allowed_agents": "string[]"
+            }
+          },
+          "404": "Book not found"
+        }
+      },
+      {
+        "path": "/annotations",
+        "method": "GET",
+        "description": "Return user annotations (highlights, notes) for a book if annotation sync is enabled.",
+        "parameters": [
+          {"name": "book_id", "in": "query", "schema": "string"},
+          {"name": "page_start", "in": "query", "schema": "int"},
+          {"name": "page_end", "in": "query", "schema": "int"}
+        ],
+        "response": {
+          "200": {
+            "schema": [
+              {
+                "id": "uuid",
+                "book_id": "uuid",
+                "page": "int",
+                "highlight_text": "string",
+                "note": "string",
+                "color": "string",
+                "source": "string",
+                "created_at": "timestamp"
+              }
+            ]
+          },
+          "403": "Annotation sync not enabled"
+        }
+      }
+    ]
+  },
+
+  "mcp_server": {
+    "enabled": true,
+    "address": "http://127.0.0.1:8778",
+    "protocol": "MCP over HTTP/SSE",
+    "description": "Exposes BookBridge capabilities as native MCP tools so any MCP-compatible agent (Claude, Cursor Agent, Cline, etc.) can call them without manual HTTP wiring.",
+    "tools": [
+      {
+        "name": "bookbridge_search",
+        "description": "Search the user's indexed book library by natural language query. Returns ranked passages with page numbers and a ready-to-use citation string. Set include_equations or include_figures to true to also surface matching equations and figure captions.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "query": {"type": "string"},
+            "max_results": {"type": "integer", "default": 5, "minimum": 1, "maximum": 50},
+            "search_mode": {"type": "string", "enum": ["hybrid", "semantic", "keyword"], "default": "hybrid"},
+            "include_equations": {"type": "boolean", "default": false},
+            "include_figures": {"type": "boolean", "default": false},
+            "filters": {
+              "type": "object",
+              "properties": {
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "authors": {"type": "array", "items": {"type": "string"}},
+                "year_range": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2},
+                "library_labels": {"type": "array", "items": {"type": "string"}}
+              }
+            }
+          },
+          "required": ["query"]
+        }
+      },
+      {
+        "name": "bookbridge_retrieve",
+        "description": "Retrieve full text of a specific page range from a book. Use after bookbridge_search when the snippet is insufficient. Works offline from local cache.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "book_id": {"type": "string"},
+            "page_start": {"type": "integer", "minimum": 1},
+            "page_end": {"type": "integer", "minimum": 1}
+          },
+          "required": ["book_id", "page_start", "page_end"]
+        }
+      },
+      {
+        "name": "bookbridge_equations",
+        "description": "Search for equations and LaTeX blocks across the book library by concept name or keyword. Returns LaTeX source where available, page, and citation.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "query": {"type": "string", "description": "Equation concept or name, e.g. 'Reynolds number', 'heat diffusion equation'"},
+            "max_results": {"type": "integer", "default": 5},
+            "book_ids": {"type": "array", "items": {"type": "string"}}
+          },
+          "required": ["query"]
+        }
+      },
+      {
+        "name": "bookbridge_figures",
+        "description": "Search figure and table captions across the book library. Returns caption text, page, figure number, and citation.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "query": {"type": "string"},
+            "result_type": {"type": "string", "enum": ["figure", "table", "both"], "default": "both"},
+            "max_results": {"type": "integer", "default": 5},
+            "book_ids": {"type": "array", "items": {"type": "string"}}
+          },
+          "required": ["query"]
+        }
+      },
+      {
+        "name": "bookbridge_related",
+        "description": "Query the cross-book knowledge graph to discover books, chapters, and concepts related to a given concept, book, or chunk. Useful for broadening research scope.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "seed_type": {"type": "string", "enum": ["concept", "book_id", "chunk_id"]},
+            "seed_value": {"type": "string"},
+            "max_hops": {"type": "integer", "default": 2, "minimum": 1, "maximum": 4},
+            "max_results": {"type": "integer", "default": 10}
+          },
+          "required": ["seed_type", "seed_value"]
+        }
+      },
+      {
+        "name": "bookbridge_reading_plan",
+        "description": "Generate an ordered reading plan for a research topic. Returns a prioritized list of books and passages the agent should read before implementing, simulating, or writing. Call this at the start of a complex research or coding task.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "topic": {"type": "string"},
+            "goal": {"type": "string", "description": "What the agent intends to do with the knowledge, e.g. 'implement a solver', 'write a lit review'"},
+            "max_books": {"type": "integer", "default": 5},
+            "max_passages_per_book": {"type": "integer", "default": 3}
+          },
+          "required": ["topic"]
+        }
+      },
+      {
+        "name": "bookbridge_cite",
+        "description": "Generate a formatted citation for a book. Call this whenever an agent uses an equation, definition, protocol, or parameter value sourced from a book.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "book_id": {"type": "string"},
+            "style": {"type": "string", "enum": ["APA", "MLA", "Chicago", "BibTeX", "Vancouver", "IEEE"]},
+            "page_start": {"type": "integer", "minimum": 1},
+            "page_end": {"type": "integer", "minimum": 1}
+          },
+          "required": ["book_id", "style"]
+        }
+      },
+      {
+        "name": "bookbridge_link_activity",
+        "description": "Log that the current file, notebook cell, or experiment run was informed by specific book passages. Builds a traceable reference trail.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "activity_type": {"type": "string", "enum": ["file", "notebook_cell", "experiment", "simulation", "run"]},
+            "activity_id": {"type": "string"},
+            "agent_or_process_id": {"type": "string"},
+            "references": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "book_id": {"type": "string"},
+                  "page_start": {"type": "integer"},
+                  "page_end": {"type": "integer"},
+                  "reason": {"type": "string"}
+                },
+                "required": ["book_id"]
+              }
+            }
+          },
+          "required": ["activity_type", "activity_id", "references"]
+        }
+      },
+      {
+        "name": "bookbridge_list_books",
+        "description": "List all books in the index with metadata. Use to discover available titles before searching.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "filter_tag": {"type": "string"},
+            "filter_author": {"type": "string"},
+            "filter_year_from": {"type": "integer"},
+            "filter_year_to": {"type": "integer"},
+            "filter_subject_area": {"type": "string"}
+          }
+        }
+      }
+    ]
+  },
+
+  "book_index": {
+    "storage": "sqlite_or_postgres_local",
+    "vector_extension": "sqlite-vec (for SQLite) or pgvector (for PostgreSQL)",
+    "embedding_model": {
+      "name": "sentence-transformers/all-MiniLM-L6-v2",
+      "dimensions": 384,
+      "runtime": "ONNX (cross-platform)"
+    },
+    "tables": {
+      "books": {
+        "fields": [
+          {"name": "id", "type": "uuid"},
+          {"name": "drive_file_id", "type": "string"},
+          {"name": "drive_account", "type": "string"},
+          {"name": "title", "type": "string"},
+          {"name": "authors", "type": "string[]"},
+          {"name": "year", "type": "int"},
+          {"name": "publisher", "type": "string"},
+          {"name": "isbn", "type": "string"},
+          {"name": "doi", "type": "string"},
+          {"name": "subject_areas", "type": "string[]"},
+          {"name": "tags", "type": "string[]"},
+          {"name": "mime_type", "type": "string"},
+          {"name": "drive_web_view_link", "type": "string"},
+          {"name": "last_indexed_at", "type": "timestamp"},
+          {"name": "pages", "type": "int"},
+          {"name": "hash", "type": "string"},
+          {"name": "language", "type": "string"},
+          {"name": "edition", "type": "string"},
+          {"name": "abstract", "type": "string"},
+          {"name": "ocr_applied", "type": "boolean", "description": "True if Tesseract OCR was used for any pages"},
+          {"name": "equations_indexed", "type": "int"},
+          {"name": "figures_indexed", "type": "int"},
+          {"name": "allowed_agents", "type": "string[]", "description": "If non-empty, only these agent IDs may access this book"}
+        ]
+      },
+      "book_chunks": {
+        "fields": [
+          {"name": "id", "type": "uuid"},
+          {"name": "book_id", "type": "uuid", "foreign_key": "books.id"},
+          {"name": "chunk_index", "type": "int"},
+          {"name": "text", "type": "string"},
+          {"name": "page_start", "type": "int"},
+          {"name": "page_end", "type": "int"},
+          {"name": "section_heading", "type": "string"},
+          {"name": "embedding", "type": "vector(384)"}
+        ]
+      },
+      "equations": {
+        "fields": [
+          {"name": "id", "type": "uuid"},
+          {"name": "book_id", "type": "uuid", "foreign_key": "books.id"},
+          {"name": "page", "type": "int"},
+          {"name": "latex", "type": "string | null", "description": "LaTeX source if extractable"},
+          {"name": "rendered_text", "type": "string", "description": "Plain-text fallback rendering"},
+          {"name": "section_heading", "type": "string"},
+          {"name": "embedding", "type": "vector(384)"}
+        ]
+      },
+      "figures": {
+        "fields": [
+          {"name": "id", "type": "uuid"},
+          {"name": "book_id", "type": "uuid", "foreign_key": "books.id"},
+          {"name": "page", "type": "int"},
+          {"name": "figure_number", "type": "string"},
+          {"name": "caption", "type": "string"},
+          {"name": "result_type", "type": "string", "enum": ["figure", "table"]},
+          {"name": "embedding", "type": "vector(384)"}
+        ]
+      },
+      "graph_edges": {
+        "fields": [
+          {"name": "id", "type": "uuid"},
+          {"name": "from_id", "type": "string", "description": "book_id, chunk_id, or concept label"},
+          {"name": "from_type", "type": "string", "enum": ["book", "chunk", "concept"]},
+          {"name": "to_id", "type": "string"},
+          {"name": "to_type", "type": "string", "enum": ["book", "chunk", "concept"]},
+          {"name": "relation", "type": "string", "enum": ["cites", "defines", "extends", "contradicts", "applies"]},
+          {"name": "weight", "type": "float"},
+          {"name": "created_at", "type": "timestamp"}
+        ],
+        "description": "Adjacency table for the cross-book knowledge graph. Edges are derived during indexing from shared concepts, co-occurring terms, and explicit citations found in text."
+      },
+      "activity_references": {
+        "fields": [
+          {"name": "id", "type": "uuid"},
+          {"name": "activity_type", "type": "string"},
+          {"name": "activity_id", "type": "string"},
+          {"name": "book_id", "type": "uuid", "foreign_key": "books.id"},
+          {"name": "page_start", "type": "int"},
+          {"name": "page_end", "type": "int"},
+          {"name": "reason", "type": "string"},
+          {"name": "agent_or_process_id", "type": "string"},
+          {"name": "timestamp", "type": "timestamp"}
+        ]
+      },
+      "annotations": {
+        "fields": [
+          {"name": "id", "type": "uuid"},
+          {"name": "book_id", "type": "uuid", "foreign_key": "books.id"},
+          {"name": "page", "type": "int"},
+          {"name": "highlight_text", "type": "string"},
+          {"name": "note", "type": "string"},
+          {"name": "color", "type": "string"},
+          {"name": "source", "type": "string"},
+          {"name": "created_at", "type": "timestamp"}
+        ],
+        "note": "Populated only when annotation_sync is enabled by the user."
+      }
+    },
+    "indexing_strategy": {
+      "chunk_size_tokens": 800,
+      "chunk_overlap_tokens": 100,
+      "preserve_section_headings": true,
+      "ocr_fallback": {
+        "enabled": true,
+        "engine": "Tesseract 5",
+        "trigger": "page_has_no_text_layer",
+        "language_detection": "automatic",
+        "note": "OCR is applied per-page. Pages with extractable text skip OCR. Applies to scanned PDFs."
+      },
+      "equation_extraction": {
+        "enabled": true,
+        "strategy": "detect LaTeX delimiters and MathML blocks in source; fall back to heuristic rendering for display-math regions in scanned pages"
+      },
+      "figure_table_extraction": {
+        "enabled": true,
+        "strategy": "detect caption patterns (Figure N, Table N) and associate with nearest bounding region"
+      },
+      "graph_construction": {
+        "enabled": true,
+        "strategy": "shared concept embedding clustering + explicit in-text citation pattern matching",
+        "run_on": "post_index"
+      },
+      "reindex_triggers": [
+        "drive_file_modified",
+        "drive_change_watch_event",
+        "missing_hash",
+        "manual_reindex"
+      ]
+    }
+  },
+
+  "metadata_enrichment": {
+    "google_books_api": {
+      "enabled": true,
+      "endpoint": "https://www.googleapis.com/books/v1/volumes",
+      "lookup_fields": ["isbn", "doi", "title", "author"],
+      "fields_to_store": [
+        "volumeInfo.title",
+        "volumeInfo.authors",
+        "volumeInfo.publisher",
+        "volumeInfo.publishedDate",
+        "volumeInfo.industryIdentifiers",
+        "volumeInfo.description",
+        "volumeInfo.categories",
+        "volumeInfo.language"
+      ]
+    },
+    "crossref_api": {
+      "enabled": true,
+      "endpoint": "https://api.crossref.org/works",
+      "lookup_by": "doi",
+      "fields_to_store": ["DOI", "author", "published", "publisher", "subject", "abstract"],
+      "note": "Polite pool; mailto set in request headers."
+    },
+    "citation_styles": ["APA", "MLA", "Chicago", "BibTeX", "Vancouver", "IEEE"],
+    "fallback_metadata": "If no external metadata found, derive from filename + user-supplied tags."
+  },
+
+  "annotation_sync": {
+    "enabled": false,
+    "user_opt_in_required": true,
+    "sources": ["hypothesis", "zotero", "local_sqlite"],
+    "note": "When enabled, highlights and notes from supported tools are pulled into the annotations table and surfaced in search results and the Annotations panel."
+  },
+
+  "agent_integration": {
+    "access_mode": "any_agent_via_http_or_mcp",
+    "protocols": [
+      "JSON over HTTP (port 8777)",
+      "MCP over HTTP/SSE (port 8778)"
+    ],
+    "recommended_workflow": [
+      "1. Agent calls bookbridge_reading_plan with topic + goal at the start of a complex task to get a prioritized reading list.",
+      "2. Agent calls bookbridge_search (with include_equations and include_figures as needed) for targeted passage retrieval.",
+      "3. Agent calls bookbridge_retrieve for full passage text when a snippet is insufficient.",
+      "4. Agent calls bookbridge_equations to look up specific equations by name before implementing formulas.",
+      "5. Agent calls bookbridge_related to discover laterally relevant books it might not have searched directly.",
+      "6. Agent calls bookbridge_cite and embeds the citation string wherever book-sourced material appears in output.",
+      "7. Agent calls bookbridge_link_activity to log provenance on the current file, cell, or run."
+    ],
+    "must_cite_rules": [
+      "If an agent uses an equation, definition, or protocol sourced from a book, it must call bookbridge_cite and embed the result.",
+      "If an agent tunes a parameter derived from a book value, it must call bookbridge_link_activity with a descriptive reason.",
+      "If an agent quotes more than one sentence from a book, it must include page_start and page_end."
+    ],
+    "agent_system_prompt_snippet": "You have access to the user's scientific book library via BookBridge MCP tools: bookbridge_reading_plan, bookbridge_search, bookbridge_retrieve, bookbridge_equations, bookbridge_figures, bookbridge_related, bookbridge_cite, bookbridge_link_activity, bookbridge_list_books. At the start of any research or implementation task, call bookbridge_reading_plan to orient yourself. Always call bookbridge_cite when using book-sourced material and embed the citation in your output. Always call bookbridge_link_activity to log provenance on any file, cell, or run you produce."
+  },
+
+  "safety_and_privacy": {
+    "drive_folder_whitelist": "User must explicitly select folders; the extension never scans the Drive root.",
+    "read_only": true,
+    "local_index": "Only extracted text and embeddings stored locally; raw PDFs/EPUBs are streamed from Drive on demand.",
+    "offline_cache_note": "Plaintext cache files are stored in ~/.bookbridge/cache/ and are covered by the same whitelist restrictions.",
+    "per_book_access_controls": "Books can be restricted to specific agent IDs; the daemon enforces this at query time.",
+    "annotation_opt_in": "Annotation sync is disabled by default and requires explicit user enablement.",
+    "redaction": "Drive file permissions are respected; books not accessible under the authed account are silently excluded.",
+    "audit_log": {
+      "enabled": true,
+      "fields": [
+        "agent_or_process_id",
+        "tool_or_endpoint",
+        "activity_type",
+        "activity_id",
+        "book_id",
+        "page_range",
+        "query_text",
+        "timestamp"
+      ],
+      "export_format": "jsonl",
+      "retention_days": 90
+    }
+  },
+
+  "ide_ui": {
+    "panels": [
+      {
+        "id": "bookbridge.bookshelf",
+        "title": "Bookshelf",
+        "features": [
+          "Browse all indexed books",
+          "Filter by tags, year, author, subject area, library",
+          "Open Drive link",
+          "View enriched metadata (DOI, abstract, categories)",
+          "See per-book OCR status, equation count, figure count"
+        ]
+      },
+      {
+        "id": "bookbridge.search",
+        "title": "Book Search",
+        "features": [
+          "Hybrid semantic + keyword search",
+          "Toggle equation and figure inclusion in results",
+          "Preview ranked snippets with page numbers",
+          "Insert citation into active editor",
+          "Open full passage in side panel"
+        ]
+      },
+      {
+        "id": "bookbridge.references",
+        "title": "Activity References",
+        "features": [
+          "Show all book references for current file, notebook, or run",
+          "Jump to book snippet",
+          "Copy citation in any supported style",
+          "Export reference list as BibTeX or formatted bibliography"
+        ]
+      },
+      {
+        "id": "bookbridge.annotations",
+        "title": "Annotations",
+        "features": [
+          "Browse user highlights and notes per book (requires annotation sync)",
+          "Search across annotations",
+          "Insert annotation text + citation into active editor"
+        ]
+      },
+      {
+        "id": "bookbridge.graph",
+        "title": "Knowledge Graph",
+        "features": [
+          "Visual graph of cross-book concept relationships",
+          "Click a node to search related passages",
+          "Filter by relation type: cites, defines, extends, contradicts, applies"
+        ]
+      }
+    ],
+    "commands": [
+      "BookBridge: Connect Google Drive",
+      "BookBridge: Add Account",
+      "BookBridge: Select Book Folders",
+      "BookBridge: Reindex Library",
+      "BookBridge: Search Books",
+      "BookBridge: Search Equations",
+      "BookBridge: Search Figures & Tables",
+      "BookBridge: Generate Reading Plan",
+      "BookBridge: Retrieve Passage",
+      "BookBridge: Insert Citation",
+      "BookBridge: Export Bibliography",
+      "BookBridge: Show References for Current File",
+      "BookBridge: Open Knowledge Graph",
+      "BookBridge: Enable Annotation Sync",
+      "BookBridge: Manage Book Access Controls",
+      "BookBridge: Open Audit Log"
+    ],
+    "status_bar_items": [
+      {
+        "id": "bookbridge_status",
+        "text": "BookBridge: {n} books indexed",
+        "tooltip": "Click to open Bookshelf. Last indexed: {last_indexed_at}. Offline: {offline_mode}"
+      }
+    ]
+  },
+
+  "setup_flow": {
+    "steps": [
+      "Install BookBridge IDE extension from marketplace.",
+      "Extension auto-starts bookbridge-daemon on first IDE launch (HTTP :8777, MCP :8778).",
+      "Run 'BookBridge: Connect Google Drive' and complete OAuth. Add extra accounts with 'BookBridge: Add Account'.",
+      "Run 'BookBridge: Select Book Folders' to whitelist one or more library folders per account.",
+      "Daemon indexes books: extracts text (with OCR fallback for scanned PDFs), extracts equations and figure captions, enriches metadata via Google Books + CrossRef, builds vector embeddings, and constructs the knowledge graph.",
+      "MCP server auto-registers BookBridge tools with the IDE's active agent/LLM session.",
+      "Agents call tools via MCP or HTTP endpoints directly. Call bookbridge_reading_plan first for research tasks.",
+      "Optionally run 'BookBridge: Enable Annotation Sync' to surface highlights in search and the Annotations panel.",
+      "Optionally run 'BookBridge: Manage Book Access Controls' to restrict sensitive books to specific agents."
+    ]
+  },
+
+  "limitations": {
+    "file_size": "PDFs larger than 200 MB may cause slow indexing; streaming retrieval unaffected.",
+    "ocr": "Tesseract OCR quality depends on scan resolution; complex two-column layouts may produce imperfect text. Minimum recommended DPI: 300.",
+    "equation_extraction": "LaTeX source is only recoverable if the PDF was generated from a LaTeX source with embedded text. Scanned equations use rendered-text fallback.",
+    "encrypted_drives": "Google Drive files encrypted at rest are accessible only via OAuth; no additional decryption layer.",
+    "offline_mode": "Requires internet for Drive API and metadata enrichment; cached index and offline_cache serve search and retrieval without connectivity.",
+    "knowledge_graph": "Graph edges are heuristic; relation types are inferred and may require user review for high-precision use cases."
+  },
+
+  "performance_considerations": {
+    "indexing_speed": "~10 pages/sec per core for PDF text extraction; ~2 pages/sec per core with OCR active",
+    "search_latency": "Typical <500 ms for hybrid search on 10k chunks",
+    "memory_footprint": "Daemon idle <100 MB; during indexing up to 500 MB; OCR peak up to 800 MB",
+    "offline_cache_size": "Approximately 50–200 KB per book page in compressed plaintext; 1000-page library ~100 MB"
+  }
+}
