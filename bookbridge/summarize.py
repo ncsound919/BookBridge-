@@ -36,7 +36,7 @@ def summarize_content(
     """Return an extractive summary of *page_start*–*page_end* from *book_id*.
 
     If *query* is provided, sentences most relevant to the query are
-    preferred.  Otherwise the highest-scoring by length/position are kept.
+    preferred. Otherwise the highest-scoring by length are kept.
     """
     book = get_book(conn, book_id)
     if book is None:
