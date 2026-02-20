@@ -1,9 +1,10 @@
-"""BookBridge HTTP daemon (port 8777) and MCP server (port 8778).
+"""BookBridge HTTP daemon (port 8777).
 
 Start with: python -m bookbridge.server
 or via the entry point: bookbridge-server
-"""
 
+The MCP server is implemented in ``bookbridge.mcp_server`` and is started
+via its own entry point."""
 from __future__ import annotations
 
 import asyncio
