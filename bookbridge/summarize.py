@@ -124,46 +124,57 @@ def generate_flashcards(conn: sqlite3.Connection, book_id: str, max_cards: int =
     if book is None:
         return {"error": f"Book not found: {book_id}"}
 
-    cards: list[dict] = []
-
-    # Flashcards from equations
-    eq_rows = conn.execute(
-        "SELECT rendered_text, latex, section_heading, page FROM equations WHERE book_id=?",
-        (book_id,),
-    ).fetchall()
-    for row in eq_rows:
-        heading = row["section_heading"] or "Equation"
-        eq_text = row["latex"] or row["rendered_text"]
-        if eq_text and len(eq_text) > 2:
-            cards.append({
-                "front": heading,
-                "back": eq_text,
-                "source": f"p. {row['page']}",
-                "card_type": "equation",
-            })
-
-    # Flashcards from text chunks (definition/term patterns)
-    chunk_rows = conn.execute(
-        "SELECT text, page_start, section_heading FROM book_chunks WHERE book_id=? ORDER BY chunk_index",
-        (book_id,),
-    ).fetchall()
-    for row in chunk_rows:
-        source_label = f"p. {row['page_start']}"
-        chunk_cards = _extract_flashcards_from_text(row["text"], source_label)
-        cards.extend(chunk_cards)
-
-    # Deduplicate by front text
+    # Deduplicate by front text as we go, to avoid holding all cards in memory.
     seen: set = set()
     unique: list[dict] = []
-    for c in cards:
-        key = c["front"].lower()
-        if key not in seen:
-            seen.add(key)
-            unique.append(c)
+
+    # Flashcards from equations
+    eq_cursor = conn.execute(
+        "SELECT rendered_text, latex, section_heading, page FROM equations WHERE book_id=?",
+        (book_id,),
+    )
+    for row in eq_cursor:
+        heading = row["section_heading"] or "Equation"
+        eq_text = row["latex"] or row["rendered_text"]
+        if not (eq_text and len(eq_text) > 2):
+            continue
+        card = {
+            "front": heading,
+            "back": eq_text,
+            "source": f"p. {row['page']}",
+            "card_type": "equation",
+        }
+        key = card["front"].lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(card)
+        if len(unique) >= max_cards:
+            break
+
+    # Flashcards from text chunks (definition/term patterns)
+    if len(unique) < max_cards:
+        chunk_cursor = conn.execute(
+            "SELECT text, page_start, section_heading FROM book_chunks WHERE book_id=? ORDER BY chunk_index",
+            (book_id,),
+        )
+        for row in chunk_cursor:
+            source_label = f"p. {row['page_start']}"
+            chunk_cards = _extract_flashcards_from_text(row["text"], source_label)
+            for card in chunk_cards:
+                key = card["front"].lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique.append(card)
+                if len(unique) >= max_cards:
+                    break
+            if len(unique) >= max_cards:
+                break
 
     return {
         "book_id": book_id,
         "book_title": book["title"],
-        "flashcards": unique[:max_cards],
+        "flashcards": unique,
         "total_generated": len(unique),
     }
