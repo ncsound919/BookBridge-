@@ -125,6 +125,13 @@ def generate_flashcards(conn: sqlite3.Connection, book_id: str, max_cards: int =
         return {"error": f"Book not found: {book_id}"}
 
     # Deduplicate by front text as we go, to avoid holding all cards in memory.
+    if max_cards <= 0:
+        return {
+            "book_id": book_id,
+            "book_title": book["title"],
+            "flashcards": [],
+            "total_generated": 0,
+        }
     seen: set = set()
     unique: list[dict] = []
 
