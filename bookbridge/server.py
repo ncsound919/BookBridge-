@@ -43,17 +43,23 @@ from .database import (
 from .indexer import index_book, load_cached_book
 from .search import search as do_search
 
-# ── global DB connection (one per process, WAL mode) ─────────────────────────
+# ── global DB connection state (thread-local connections, WAL mode) ─────────
 
-_db_conn: Optional[sqlite3.Connection] = None
+_db_state = threading.local()
 _db_lock = threading.Lock()
 
 
 def get_db() -> sqlite3.Connection:
-    global _db_conn
-    if _db_conn is None:
-        _db_conn = _connect(DB_PATH)
-    return _db_conn
+    """
+    Return a SQLite connection for the current thread.
+
+    Each thread gets its own connection instance to avoid concurrent use of a
+    single sqlite3.Connection across threads, which is not safe even with
+    check_same_thread=False.
+    """
+    if not hasattr(_db_state, "conn") or _db_state.conn is None:
+        _db_state.conn = _connect(DB_PATH)
+    return _db_state.conn
 
 
 # ── lifespan ──────────────────────────────────────────────────────────────────
@@ -61,10 +67,12 @@ def get_db() -> sqlite3.Connection:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db(DB_PATH)
-    get_db()  # prime the connection
+    get_db()  # prime the connection for the main thread
     yield
-    if _db_conn:
-        _db_conn.close()
+    # Close the main-thread connection if it was created.
+    if hasattr(_db_state, "conn") and _db_state.conn is not None:
+        _db_state.conn.close()
+        _db_state.conn = None
 
 
 # ── app ───────────────────────────────────────────────────────────────────────
