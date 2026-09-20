@@ -20,6 +20,11 @@ CHUNK_SIZE_TOKENS = int(os.environ.get("BOOKBRIDGE_CHUNK_SIZE", "800"))
 CHUNK_OVERLAP_TOKENS = int(os.environ.get("BOOKBRIDGE_CHUNK_OVERLAP", "100"))
 EMBEDDING_DIMENSIONS = 384
 
+# Library folders scanned by POST /scan (auto-ingest). Relative paths are
+# resolved against the Uplift ecosystem root (repo-relative), not cwd, so the
+# daemon can be launched from any directory.
+SCAN_SUPPORTED_EXTS = {".txt", ".pdf", ".epub"}
+
 # Ensure dirs exist
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_DIR.mkdir(parents=True, exist_ok=True)

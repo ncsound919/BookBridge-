@@ -8,6 +8,7 @@ via its own entry point."""
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 from contextlib import asynccontextmanager
@@ -20,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from . import __version__
 from .citation import format_citation
-from .config import DB_PATH, HTTP_HOST, HTTP_PORT
+from .config import DB_PATH, HTTP_HOST, HTTP_PORT, SCAN_SUPPORTED_EXTS
 from .database import (
     _connect,
     create_annotation,
@@ -169,6 +170,17 @@ class IndexRequest(BaseModel):
     ocr_fallback: bool = True
 
 
+class ScanRequest(BaseModel):
+    roots: Optional[list[str]] = None
+    force: bool = False
+
+
+class GroundRequest(BaseModel):
+    topic: str
+    source: Optional[str] = None
+    max_results: int = Field(5, ge=1, le=20)
+
+
 class AddBookRequest(BaseModel):
     local_path: str
     title: Optional[str] = None
@@ -265,6 +277,67 @@ def index_progress(job_id: str = Query(...)):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
+@app.post("/scan")
+def scan_library(req: ScanRequest):
+    """Scan configured library folders for supported files and index any not yet
+    in the DB. Used by Draymond's Daily Book Library Scan job.
+
+    Defaults to the Uplift ecosystem books folder; override with the
+    ``BOOKBRIDGE_LIBRARY_ROOT`` env var or an explicit ``roots`` payload.
+    """
+    conn = get_db()
+    existing_paths = {
+        str(Path(b["local_path"])).lower()
+        for b in list_books(conn)
+        if b.get("local_path")
+    }
+
+    roots: list[str] = []
+    if req.roots:
+        roots = req.roots
+    else:
+        env_root = os.environ.get("BOOKBRIDGE_LIBRARY_ROOT", "").strip()
+        if env_root:
+            roots = [env_root]
+        else:
+            # BookBridge lives at agents/BookBridge--main → ecosystem root is 4 up.
+            default_root = Path(__file__).resolve().parents[4] / "docs" / "knowledge" / "books"
+            roots = [str(default_root)]
+
+    added = 0
+    skipped = 0
+    missing_dirs: list[str] = []
+    errors: list[str] = []
+
+    for root in roots:
+        root_path = Path(root)
+        if not root_path.is_dir():
+            missing_dirs.append(root)
+            continue
+        for ext in SCAN_SUPPORTED_EXTS:
+            for file_path in root_path.rglob(f"*{ext}"):
+                if not file_path.is_file():
+                    continue
+                key = str(file_path).lower()
+                if key in existing_paths and not req.force:
+                    skipped += 1
+                    continue
+                try:
+                    with _db_lock:
+                        index_book(conn, file_path, {})
+                    existing_paths.add(key)
+                    added += 1
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"{file_path.name}: {e}")
+
+    return {
+        "added_count": added,
+        "skipped": skipped,
+        "missing_dirs": missing_dirs,
+        "errors": errors,
+    }
+
+
 @app.post("/search")
 def search_books(req: SearchRequest):
     conn = get_db()
@@ -282,6 +355,71 @@ def search_books(req: SearchRequest):
     # Apply min_score filter
     result["results"] = [r for r in result["results"] if r.get("score", 0) >= req.min_score]
     return result
+
+
+@app.post("/ground")
+def ground(req: GroundRequest):
+    """Ground a research topic against the library: search + reading plan.
+
+    Mirrors the old /api/trending-topics 'ground' contract the Draymond
+    book-grounded-research chain expects (action ``bookbridge_ground``).
+    """
+    conn = get_db()
+    results = do_search(conn, req.topic, max_results=req.max_results * 3)
+    filtered = [r for r in results["results"] if r.get("score", 0) >= 0.3]
+
+    # If a source path is given and not yet indexed, add it first.
+    if req.source and Path(req.source).exists():
+        src = Path(req.source)
+        if src.suffix.lower() in SCAN_SUPPORTED_EXTS:
+            existing = {
+                str(Path(b["local_path"])).lower()
+                for b in list_books(conn)
+                if b.get("local_path")
+            }
+            if str(src).lower() not in existing:
+                try:
+                    with _db_lock:
+                        index_book(conn, src, {})
+                except Exception as e:  # noqa: BLE001
+                    pass
+
+    passages = []
+    for r in filtered[: req.max_results]:
+        passages.append(
+            {
+                "book": r.get("book_title") or r.get("book_id"),
+                "book_id": r.get("book_id"),
+                "passage": r.get("text", "")[:1200],
+                "score": r.get("score", 0),
+                "page_start": r.get("page_start"),
+                "page_end": r.get("page_end"),
+            }
+        )
+
+    plan_res = do_search(conn, req.topic, max_results=5 * 3)
+    plan_books = []
+    seen: set[str] = set()
+    for r in plan_res["results"]:
+        bid = r.get("book_id")
+        if bid and bid not in seen:
+            seen.add(bid)
+            plan_books.append(
+                {
+                    "book_id": bid,
+                    "book_title": r.get("book_title"),
+                    "authors": r.get("authors"),
+                    "score": r.get("score", 0),
+                }
+            )
+
+    return {
+        "grounded": bool(passages),
+        "topic": req.topic,
+        "passages": passages,
+        "reading_plan": plan_books,
+        "total_matches": len(filtered),
+    }
 
 
 @app.post("/retrieve")
